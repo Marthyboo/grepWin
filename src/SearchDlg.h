@@ -78,6 +78,7 @@ public:
     void  SetWholeWords(bool bSet);
     void  SetUTF8(bool bSet);
     void  SetBinary(bool bSet);
+    void  SetHexSearch(bool bSet);
     void  SetSize(uint64_t size, int cmp);
     void  SetIncludeSystem(bool bSet);
     void  SetIncludeHidden(bool bSet);
@@ -106,6 +107,7 @@ protected:
     int              SearchOnTextFile(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::wstring& searchExpression, const std::wstring& replaceExpression, UINT syntaxFlags, UINT matchFlags, CTextFile& textFile);
     template <typename CharT = char>
     int         SearchByFilePath(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::wstring& searchExpression, const std::wstring& replaceExpression, UINT syntaxFlags, UINT matchFlags, bool misaligned, CharT* dummy = nullptr);
+    int         SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern);
     void        SendResult(const CSearchInfo& sInfo, const int nCount);
     void        SearchFile(CSearchInfo sInfo, const std::wstring& searchRoot);
 
@@ -183,6 +185,8 @@ private:
     bool                             m_bUTF8;
     bool                             m_bUTF8C;
     bool                             m_bForceBinary;
+    bool                             m_bHexSearch;
+    bool                             m_lastSearchWasHex;
     bool                             m_bCaseSensitive;
     bool                             m_bCaseSensitiveC;
     bool                             m_bDotMatchesNewline;
@@ -258,6 +262,7 @@ private:
     CRegStdDWORD                     m_regWholeWords;
     CRegStdDWORD                     m_regUTF8;
     CRegStdDWORD                     m_regBinary;
+    CRegStdDWORD                     m_regHexSearch;
     CRegStdDWORD                     m_regCaseSensitive;
     CRegStdDWORD                     m_regDotMatchesNewline;
     CRegStdDWORD                     m_regUseRegexForPaths;
