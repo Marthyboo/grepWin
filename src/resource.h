@@ -96,6 +96,9 @@
 #define IDS_FILTER_CUE                  181
 #define IDS_ERR_WHOLEWORDNOTPOSSIBLE    182
 #define IDS_ERR_INVALID_TEXT            183
+#define IDS_OFFSET                      184
+#define IDS_HEXSEARCH                   185
+#define IDS_ERR_INVALID_HEX             186
 #define IDC_SEARCHTEXT                  1000
 #define IDC_REGEXRADIO                  1001
 #define IDC_TEXTRADIO                   1002
@@ -196,6 +199,7 @@
 #define IDC_EDIT1                       1090
 #define IDC_NUMNULL                     1090
 #define IDC_FILTER                      1090
+#define IDC_HEXRADIO                    1096
 #define IDC_SYSLINK1                    1091
 #define IDC_INCLUDESYMLINK              1092
 #define IDC_CRLF                        1093
