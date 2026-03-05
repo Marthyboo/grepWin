@@ -154,7 +154,8 @@ BEGIN
     GROUPBOX        "Search in",IDC_GROUPSEARCHIN,7,10,566,29
     CONTROL         "Regex search",IDC_REGEXRADIO,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,14,52,86,10
     CONTROL         "Text search",IDC_TEXTRADIO,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,108,52,90,10
-    CONTROL         "&Whole word",IDC_WHOLEWORDS,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,198,52,120,10
+    CONTROL         "Hex search",IDC_HEXRADIO,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,198,52,80,10
+    CONTROL         "&Whole word",IDC_WHOLEWORDS,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,282,52,120,10
     RTEXT           "",IDC_REGEXOKLABEL,461,52,105,8
     LTEXT           "Search &for:",IDC_SEARCHFORLABEL,14,65,74,8
     EDITTEXT        IDC_SEARCHTEXT,91,64,457,12,ES_AUTOHSCROLL
@@ -422,6 +423,9 @@ BEGIN
     IDS_ERR_WHOLEWORDNOTPOSSIBLE 
                             "Search string contains non-word characters, a ""whole word"" search is not possible!"
     IDS_ERR_INVALID_TEXT    "Invalid search text"
+    IDS_ERR_INVALID_HEX     "Invalid hex pattern"
+    IDS_OFFSET              "Offset"
+    IDS_HEXSEARCH           "Hex search"
 END
 
 STRINGTABLE
