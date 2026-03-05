@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <Commdlg.h>
+#include <cstdint>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -81,6 +82,7 @@ namespace
 
 constexpr auto SearchEditSubclassID = 4321;
 std::wstring   g_utf8ReplaceWarningShownForSearchPath;
+static bool    ParseHexPattern(const std::wstring& str, std::vector<std::pair<bool, uint8_t>>& out);
 
 // Theme-aware color helper
 struct ThemeColors
@@ -327,6 +329,8 @@ CSearchDlg::CSearchDlg(HWND hParent)
     , m_bUTF8(false)
     , m_bUTF8C(false)
     , m_bForceBinary(false)
+    , m_bHexSearch(false)
+    , m_lastSearchWasHex(false)
     , m_bCaseSensitive(false)
     , m_bCaseSensitiveC(false)
     , m_bDotMatchesNewline(false)
@@ -378,6 +382,7 @@ CSearchDlg::CSearchDlg(HWND hParent)
     , m_regWholeWords(L"Software\\grepWin\\WholeWords")
     , m_regUTF8(L"Software\\grepWin\\UTF8")
     , m_regBinary(L"Software\\grepWin\\Binary")
+    , m_regHexSearch(L"Software\\grepWin\\HexSearch", 0)
     , m_regCaseSensitive(L"Software\\grepWin\\CaseSensitive")
     , m_regDotMatchesNewline(L"Software\\grepWin\\DotMatchesNewline")
     , m_regUseRegexForPaths(L"Software\\grepWin\\UseFileMatchRegex")
@@ -437,8 +442,18 @@ bool CSearchDlg::GetDarkModeState() const
 
 void CSearchDlg::SetSearchModeUI(bool isTextMode)
 {
-    DialogEnableWindow(IDC_WHOLEWORDS, isTextMode);
-    DialogEnableWindow(IDC_TESTREGEX, !isTextMode);
+    bool isHexMode = IsDlgButtonChecked(*this, IDC_HEXRADIO) == BST_CHECKED;
+    m_bHexSearch   = isHexMode;
+    DialogEnableWindow(IDC_WHOLEWORDS, isTextMode && !isHexMode);
+    DialogEnableWindow(IDC_TESTREGEX, !isTextMode && !isHexMode);
+    DialogEnableWindow(IDC_REPLACE, !isHexMode);
+    DialogEnableWindow(IDC_REPLACETEXT, !isHexMode);
+    DialogEnableWindow(IDC_REPLACEWITHLABEL, !isHexMode);
+    DialogEnableWindow(IDC_EDITMULTILINE2, !isHexMode);
+    ShowWindow(GetDlgItem(*this, IDC_REPLACEWITHLABEL), isHexMode ? SW_HIDE : SW_SHOW);
+    ShowWindow(GetDlgItem(*this, IDC_REPLACETEXT), isHexMode ? SW_HIDE : SW_SHOW);
+    ShowWindow(GetDlgItem(*this, IDC_EDITMULTILINE2), isHexMode ? SW_HIDE : SW_SHOW);
+    SetDlgItemText(*this, IDC_SEARCHFORLABEL, isHexMode ? L"Search for (hex bytes):" : L"Search &for:");
 }
 
 LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -650,13 +665,15 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
             SendDlgItemMessage(hwndDlg, IDC_CASE_SENSITIVE, BM_SETCHECK, m_bCaseSensitive ? BST_CHECKED : BST_UNCHECKED, 0);
             SendDlgItemMessage(hwndDlg, IDC_DOTMATCHNEWLINE, BM_SETCHECK, m_bDotMatchesNewline ? BST_CHECKED : BST_UNCHECKED, 0);
 
-            CheckRadioButton(hwndDlg, IDC_REGEXRADIO, IDC_TEXTRADIO, (bPortable ? _wtoi(g_iniFile.GetValue(L"global", L"UseRegex", L"0")) : static_cast<DWORD>(m_regUseRegex)) ? IDC_REGEXRADIO : IDC_TEXTRADIO);
+            m_bHexSearch = bPortable ? !!_wtoi(g_iniFile.GetValue(L"global", L"HexSearch", L"0")) : !!static_cast<DWORD>(m_regHexSearch);
+            UINT searchModeId = m_bHexSearch ? IDC_HEXRADIO : ((bPortable ? _wtoi(g_iniFile.GetValue(L"global", L"UseRegex", L"0")) : static_cast<DWORD>(m_regUseRegex)) ? IDC_REGEXRADIO : IDC_TEXTRADIO);
+            CheckRadioButton(hwndDlg, IDC_REGEXRADIO, IDC_HEXRADIO, searchModeId);
             CheckRadioButton(hwndDlg, IDC_ALLSIZERADIO, IDC_SIZERADIO, m_bAllSize ? IDC_ALLSIZERADIO : IDC_SIZERADIO);
             SendDlgItemMessage(hwndDlg, IDC_WHOLEWORDS, BM_SETCHECK, m_bWholeWords ? BST_CHECKED : BST_UNCHECKED, 0);
             if (!m_searchString.empty() || m_bUseRegexC)
-                CheckRadioButton(*this, IDC_REGEXRADIO, IDC_TEXTRADIO, m_bUseRegex ? IDC_REGEXRADIO : IDC_TEXTRADIO);
+                CheckRadioButton(*this, IDC_REGEXRADIO, IDC_HEXRADIO, m_bHexSearch ? IDC_HEXRADIO : (m_bUseRegex ? IDC_REGEXRADIO : IDC_TEXTRADIO));
 
-            bool isTextMode = IsDlgButtonChecked(*this, IDC_TEXTRADIO);
+            bool isTextMode = IsDlgButtonChecked(*this, IDC_TEXTRADIO) == BST_CHECKED;
             SetSearchModeUI(isTextMode);
 
             ::SetDlgItemText(*this, IDOK, TranslatedString(hResource, IDS_SEARCH).c_str());
@@ -737,6 +754,7 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
             AdjustControlSize(IDC_UTF8);
             AdjustControlSize(IDC_REGEXRADIO);
             AdjustControlSize(IDC_TEXTRADIO);
+            AdjustControlSize(IDC_HEXRADIO);
             AdjustControlSize(IDC_WHOLEWORDS);
             AdjustControlSize(IDC_CASE_SENSITIVE);
             AdjustControlSize(IDC_DOTMATCHNEWLINE);
@@ -773,6 +791,7 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
             m_resizer.AddControl(hwndDlg, IDC_GROUPSEARCHFOR, RESIZER_TOPLEFTRIGHT);
             m_resizer.AddControl(hwndDlg, IDC_REGEXRADIO, RESIZER_TOPLEFT);
             m_resizer.AddControl(hwndDlg, IDC_TEXTRADIO, RESIZER_TOPLEFT);
+            m_resizer.AddControl(hwndDlg, IDC_HEXRADIO, RESIZER_TOPLEFT);
             m_resizer.AddControl(hwndDlg, IDC_WHOLEWORDS, RESIZER_TOPLEFT);
             m_resizer.AddControl(hwndDlg, IDC_SEARCHFORLABEL, RESIZER_TOPLEFT);
             m_resizer.AddControl(hwndDlg, IDC_SEARCHTEXT, RESIZER_TOPLEFTRIGHT);
@@ -1514,8 +1533,9 @@ LRESULT CSearchDlg::DoCommand(int id, int msg)
                     InitResultList();
                 }
 
-                m_dwThreadRunning = true;
-                m_cancelled       = false;
+                m_dwThreadRunning  = true;
+                m_cancelled        = false;
+                m_lastSearchWasHex = m_bHexSearch;
                 SetDlgItemText(*this, IDOK, TranslatedString(hResource, IDS_STOP).c_str());
                 AddToolTip(IDOK, L"");
                 ShowWindow(GetDlgItem(*this, IDC_FILTER), SW_HIDE);
@@ -1721,22 +1741,23 @@ LRESULT CSearchDlg::DoCommand(int id, int msg)
         }
         case IDC_REGEXRADIO:
         case IDC_TEXTRADIO:
+        case IDC_HEXRADIO:
         {
             if (id != IDC_SEARCHPATH)
             {
-                bool isTextMode = IsDlgButtonChecked(*this, IDC_TEXTRADIO);
+                bool isTextMode = (IsDlgButtonChecked(*this, IDC_TEXTRADIO) == BST_CHECKED);
                 SetSearchModeUI(isTextMode);
             }
         }
         case IDC_SEARCHTEXT:
         {
-            if (id == IDC_REGEXRADIO || id == IDC_TEXTRADIO || (msg == EN_CHANGE && id == IDC_SEARCHTEXT))
+            if (id == IDC_REGEXRADIO || id == IDC_TEXTRADIO || id == IDC_HEXRADIO || (msg == EN_CHANGE && id == IDC_SEARCHTEXT))
             {
                 if (m_autoCompleteSearchPatterns.GetOptions() & ACO_NOPREFIXFILTERING)
                     m_autoCompleteSearchPatterns.SetOptions(ACO_UPDOWNKEYDROPSLIST | ACO_AUTOSUGGEST);
                 std::wstring search = GetDlgItemText(IDC_SEARCHTEXT).get();
                 m_searchValidLength = static_cast<int>(search.length());
-                if (IsDlgButtonChecked(*this, IDC_REGEXRADIO) == BST_CHECKED)
+                if (IsDlgButtonChecked(*this, IDC_REGEXRADIO) == BST_CHECKED && IsDlgButtonChecked(*this, IDC_HEXRADIO) != BST_CHECKED)
                 {
                     removeGrepWinExtVariables(search);
                     if (m_searchValidLength > 0 && !isRegexValid(search))
@@ -2236,7 +2257,8 @@ bool CSearchDlg::InitResultList()
     }
     else
     {
-        lvc.pszText = const_cast<LPWSTR>(static_cast<LPCWSTR>(sLine.c_str()));
+        std::wstring sOffset = TranslatedString(hResource, IDS_OFFSET);
+        lvc.pszText = const_cast<LPWSTR>(static_cast<LPCWSTR>(m_lastSearchWasHex ? sOffset.c_str() : sLine.c_str()));
         ListView_InsertColumn(hListControl, 1, &lvc);
         lvc.pszText = const_cast<LPWSTR>(static_cast<LPCWSTR>(sMove.c_str()));
         ListView_InsertColumn(hListControl, 2, &lvc);
@@ -3169,7 +3191,43 @@ LRESULT CSearchDlg::DoListNotify(LPNMITEMACTIVATE lpNMItemActivate)
 
             const auto& item                 = m_items[itemsIndex];
             const auto& pInfo                = item;
-            if (item->encoding == CTextFile::Binary)
+            if (item->encoding == CTextFile::Binary && m_lastSearchWasHex)
+            {
+                if (pItem->mask & LVIF_TEXT)
+                {
+                    switch (pItem->iSubItem)
+                    {
+                        case 0: // name of the file
+                            wcsncpy_s(pItem->pszText, pItem->cchTextMax, pInfo->filePath.substr(pInfo->filePath.find_last_of('\\') + 1).c_str(), pItem->cchTextMax - 1LL);
+                            break;
+                        case 1: // byte offset
+                            swprintf_s(pItem->pszText, pItem->cchTextMax, L"0x%lX", pInfo->matchLinesNumbers[itemsSubIndex]);
+                            break;
+                        case 2: // length
+                            swprintf_s(pItem->pszText, pItem->cchTextMax, L"%ld", pInfo->matchColumnsNumbers[itemsSubIndex]);
+                            break;
+                        case 3: // hex preview
+                        {
+                            std::wstring line;
+                            if (pInfo->matchLinesMap.contains(pInfo->matchLinesNumbers[itemsSubIndex]))
+                                line = pInfo->matchLinesMap.at(pInfo->matchLinesNumbers[itemsSubIndex]);
+                            wcsncpy_s(pItem->pszText, pItem->cchTextMax, line.c_str(), pItem->cchTextMax - 1LL);
+                        }
+                        break;
+                        case 4: // path
+                            wcsncpy_s(pItem->pszText, pItem->cchTextMax, pInfo->filePath.substr(0, pInfo->filePath.size() - pInfo->filePath.substr(pInfo->filePath.find_last_of('\\') + 1).size() - 1).c_str(), pItem->cchTextMax - 1LL);
+                            break;
+                        default:
+                            pItem->pszText[0] = 0;
+                            break;
+                    }
+                }
+                if (pItem->mask & LVIF_IMAGE)
+                {
+                    pItem->iImage = pInfo->folder ? CSysImageList::GetInstance().GetDirIconIndex() : CSysImageList::GetInstance().GetFileIconIndex(pInfo->filePath);
+                }
+            }
+            else if (item->encoding == CTextFile::Binary)
             {
                 if (pItem->mask & LVIF_TEXT)
                 {
@@ -3534,7 +3592,17 @@ bool CSearchDlg::SaveSettings()
         pBuf++;
     } while (*pBuf && (*(pBuf - 1)));
 
-    m_bUseRegex = (IsDlgButtonChecked(*this, IDC_REGEXRADIO) == BST_CHECKED);
+    m_bUseRegex  = (IsDlgButtonChecked(*this, IDC_REGEXRADIO) == BST_CHECKED);
+    m_bHexSearch = (IsDlgButtonChecked(*this, IDC_HEXRADIO) == BST_CHECKED);
+    if (m_bHexSearch && !m_searchString.empty())
+    {
+        std::vector<std::pair<bool, uint8_t>> hexPattern;
+        if (!ParseHexPattern(m_searchString, hexPattern))
+        {
+            ShowEditBalloon(IDC_SEARCHTEXT, TranslatedString(hResource, IDS_ERR_INVALID_HEX).c_str(), L"Enter hex bytes, e.g. 00 00 3B 00 or ?? for any byte.");
+            return false;
+        }
+    }
     if (m_bUseRegex)
     {
         // check if the regex is valid before doing the search
@@ -3644,6 +3712,7 @@ bool CSearchDlg::SaveSettings()
         g_iniFile.SetValue(L"global", L"WholeWords", m_bWholeWords ? L"1" : L"0");
         g_iniFile.SetValue(L"global", L"UTF8", m_bUTF8 ? L"1" : L"0");
         g_iniFile.SetValue(L"global", L"Binary", m_bForceBinary ? L"1" : L"0");
+        g_iniFile.SetValue(L"global", L"HexSearch", m_bHexSearch ? L"1" : L"0");
         g_iniFile.SetValue(L"global", L"CaseSensitive", m_bCaseSensitive ? L"1" : L"0");
         g_iniFile.SetValue(L"global", L"DotMatchesNewline", m_bDotMatchesNewline ? L"1" : L"0");
         g_iniFile.SetValue(L"global", L"pattern", m_patternRegex.c_str());
@@ -3668,6 +3737,7 @@ bool CSearchDlg::SaveSettings()
         m_regWholeWords         = static_cast<DWORD>(m_bWholeWords);
         m_regUTF8               = static_cast<DWORD>(m_bUTF8);
         m_regBinary             = static_cast<DWORD>(m_bForceBinary);
+        m_regHexSearch          = static_cast<DWORD>(m_bHexSearch);
         m_regCaseSensitive      = static_cast<DWORD>(m_bCaseSensitive);
         m_regDotMatchesNewline  = static_cast<DWORD>(m_bDotMatchesNewline);
         m_regPattern            = m_patternRegex;
@@ -3734,7 +3804,7 @@ DWORD CSearchDlg::SearchThread()
         pBufSearchPath++;
     } while (*pBufSearchPath && (*(pBufSearchPath - 1)));
 
-    if (!m_bUseRegex)
+    if (!m_bUseRegex && !m_bHexSearch)
     {
         if (!m_searchString.empty())
         {
@@ -4064,6 +4134,11 @@ void CSearchDlg::SetBinary(bool bSet)
     m_bUTF8C       = true;
     m_bForceBinary = bSet;
     m_bUTF8        = false;
+}
+
+void CSearchDlg::SetHexSearch(bool bSet)
+{
+    m_bHexSearch = bSet;
 }
 
 void CSearchDlg::SetSize(uint64_t size, int cmp)
@@ -4409,6 +4484,57 @@ int CSearchDlg::SearchOnTextFile(CSearchInfo& sInfo, const std::wstring& searchR
 
 namespace
 {
+static int hexCharToVal(wchar_t c)
+{
+    if (c >= L'0' && c <= L'9')
+        return c - L'0';
+    if (c >= L'a' && c <= L'f')
+        return c - L'a' + 10;
+    if (c >= L'A' && c <= L'F')
+        return c - L'A' + 10;
+    return -1;
+}
+
+static bool isHexSeparator(wchar_t c)
+{
+    // Accept all whitespace (including CR/LF) and common byte separators.
+    return iswspace(c) || c == L',' || c == L'-' || c == L':' || c == L';' || c == L'|';
+}
+
+// Parses hex search string like "00 00 3B 00" or "00003B00" or "0x00 0x3B". "??" = any byte.
+// Returns true and fills pattern, or false on parse error. Pattern: first=true => wildcard, first=false => byte in second.
+static bool ParseHexPattern(const std::wstring& str, std::vector<std::pair<bool, uint8_t>>& out)
+{
+    out.clear();
+    const wchar_t* p = str.c_str();
+    while (*p)
+    {
+        while (isHexSeparator(*p))
+            ++p;
+        if (!*p)
+            break;
+        if (p[0] == L'?' && (p[1] == L'?' || isHexSeparator(p[1]) || !p[1]))
+        {
+            out.push_back({true, 0});
+            p += (p[1] == L'?') ? 2 : 1;
+            continue;
+        }
+        if ((p[0] == L'0' && (p[1] == L'x' || p[1] == L'X')) ||
+            (p[0] == L'\\' && (p[1] == L'x' || p[1] == L'X')))
+            p += 2;
+        int h1 = hexCharToVal(p[0]);
+        int h2 = hexCharToVal(p[1]);
+        if (h1 >= 0 && h2 >= 0)
+        {
+            out.push_back({false, static_cast<uint8_t>((h1 << 4) | h2)});
+            p += 2;
+            continue;
+        }
+        return false;
+    }
+    return !out.empty();
+}
+
 std::wstring utf16Swap(const std::wstring& str)
 {
     std::wstring swapped = str;
@@ -4755,8 +4881,75 @@ void CSearchDlg::SendResult(const CSearchInfo& sInfo, const int nCount)
         SendMessage(*this, SEARCH_FOUND, bAsResult, reinterpret_cast<LPARAM>(&sInfo));
 }
 
+int CSearchDlg::SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern)
+{
+    boost::iostreams::mapped_file_source inFile(boost::filesystem::path(sInfo.filePath));
+    if (!inFile.is_open())
+        return -1;
+    const uint8_t* inData = reinterpret_cast<const uint8_t*>(inFile.data());
+    size_t         inSize = inFile.size();
+    size_t         patternLen = hexPattern.size();
+    if (patternLen == 0 || inSize < patternLen)
+    {
+        inFile.close();
+        return 0;
+    }
+    sInfo.encoding = CTextFile::Binary;
+    int nFound     = 0;
+    for (size_t pos = 0; pos <= inSize - patternLen && !m_cancelled; ++pos)
+    {
+        bool match = true;
+        for (size_t i = 0; i < patternLen && match; ++i)
+        {
+            if (hexPattern[i].first) // wildcard
+                continue;
+            if (inData[pos + i] != hexPattern[i].second)
+                match = false;
+        }
+        if (match)
+        {
+            ++nFound;
+            if (m_bNotSearch)
+                break;
+            sInfo.matchLinesNumbers.push_back(static_cast<DWORD>(pos));
+            sInfo.matchColumnsNumbers.push_back(static_cast<DWORD>(patternLen));
+            ++sInfo.matchCount;
+            std::wstring hexPreview;
+            size_t       previewLen = (std::min)(patternLen, static_cast<size_t>(32));
+            for (size_t k = 0; k < previewLen; ++k)
+            {
+                if (k)
+                    hexPreview += L" ";
+                wchar_t buf[4];
+                swprintf_s(buf, L"%02X", inData[pos + k]);
+                hexPreview += buf;
+            }
+            if (patternLen > 32)
+                hexPreview += L"...";
+            sInfo.matchLinesMap[static_cast<DWORD>(pos)] = hexPreview;
+            sInfo.matchLengths.push_back(static_cast<DWORD>(patternLen));
+        }
+    }
+    inFile.close();
+    return nFound;
+}
+
 void CSearchDlg::SearchFile(CSearchInfo sInfo, const std::wstring& searchRoot)
 {
+    if (m_bHexSearch)
+    {
+        std::vector<std::pair<bool, uint8_t>> hexPattern;
+        if (!ParseHexPattern(m_searchString, hexPattern))
+        {
+            SendResult(sInfo, -1);
+            return;
+        }
+        sInfo.encoding = CTextFile::Binary;
+        int nCount    = SearchByHexPattern(sInfo, searchRoot, hexPattern);
+        SendResult(sInfo, nCount);
+        return;
+    }
+
     CTextFile              textFile;
     CTextFile::UnicodeType type        = CTextFile::AutoType;
     bool                   bLoadResult = false;
