@@ -83,6 +83,7 @@ namespace
 constexpr auto SearchEditSubclassID = 4321;
 std::wstring   g_utf8ReplaceWarningShownForSearchPath;
 static bool    ParseHexPattern(const std::wstring& str, std::vector<std::pair<bool, uint8_t>>& out);
+static bool    ParseHexReplacement(const std::wstring& str, std::vector<uint8_t>& out);
 
 // Theme-aware color helper
 struct ThemeColors
@@ -446,14 +447,15 @@ void CSearchDlg::SetSearchModeUI(bool isTextMode)
     m_bHexSearch   = isHexMode;
     DialogEnableWindow(IDC_WHOLEWORDS, isTextMode && !isHexMode);
     DialogEnableWindow(IDC_TESTREGEX, !isTextMode && !isHexMode);
-    DialogEnableWindow(IDC_REPLACE, !isHexMode);
-    DialogEnableWindow(IDC_REPLACETEXT, !isHexMode);
-    DialogEnableWindow(IDC_REPLACEWITHLABEL, !isHexMode);
-    DialogEnableWindow(IDC_EDITMULTILINE2, !isHexMode);
-    ShowWindow(GetDlgItem(*this, IDC_REPLACEWITHLABEL), isHexMode ? SW_HIDE : SW_SHOW);
-    ShowWindow(GetDlgItem(*this, IDC_REPLACETEXT), isHexMode ? SW_HIDE : SW_SHOW);
-    ShowWindow(GetDlgItem(*this, IDC_EDITMULTILINE2), isHexMode ? SW_HIDE : SW_SHOW);
+    DialogEnableWindow(IDC_REPLACE, true);
+    DialogEnableWindow(IDC_REPLACETEXT, true);
+    DialogEnableWindow(IDC_REPLACEWITHLABEL, true);
+    DialogEnableWindow(IDC_EDITMULTILINE2, true);
+    ShowWindow(GetDlgItem(*this, IDC_REPLACEWITHLABEL), SW_SHOW);
+    ShowWindow(GetDlgItem(*this, IDC_REPLACETEXT), SW_SHOW);
+    ShowWindow(GetDlgItem(*this, IDC_EDITMULTILINE2), SW_SHOW);
     SetDlgItemText(*this, IDC_SEARCHFORLABEL, isHexMode ? L"Search for (hex bytes):" : L"Search &for:");
+    SetDlgItemText(*this, IDC_REPLACEWITHLABEL, isHexMode ? L"Replace with (hex bytes):" : L"Replace &with:");
 }
 
 LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -3602,6 +3604,15 @@ bool CSearchDlg::SaveSettings()
             ShowEditBalloon(IDC_SEARCHTEXT, TranslatedString(hResource, IDS_ERR_INVALID_HEX).c_str(), L"Enter hex bytes, e.g. 00 00 3B 00 or ?? for any byte.");
             return false;
         }
+        if (m_bReplace)
+        {
+            std::vector<uint8_t> replacePattern;
+            if (!ParseHexReplacement(m_replaceString, replacePattern))
+            {
+                ShowEditBalloon(IDC_REPLACETEXT, TranslatedString(hResource, IDS_ERR_INVALID_HEX).c_str(), L"Enter replacement hex bytes, e.g. FF EE 01. Leave empty to remove matched bytes.");
+                return false;
+            }
+        }
     }
     if (m_bUseRegex)
     {
@@ -4535,6 +4546,34 @@ static bool ParseHexPattern(const std::wstring& str, std::vector<std::pair<bool,
     return !out.empty();
 }
 
+// Parses replacement bytes like "FF EE 01", "0xFF 0xEE", or "\xFF\xEE".
+// Returns true for valid input. Empty string is valid and means "remove matched bytes".
+static bool ParseHexReplacement(const std::wstring& str, std::vector<uint8_t>& out)
+{
+    out.clear();
+    const wchar_t* p = str.c_str();
+    while (*p)
+    {
+        while (isHexSeparator(*p))
+            ++p;
+        if (!*p)
+            break;
+        if ((p[0] == L'0' && (p[1] == L'x' || p[1] == L'X')) ||
+            (p[0] == L'\\' && (p[1] == L'x' || p[1] == L'X')))
+            p += 2;
+        int h1 = hexCharToVal(p[0]);
+        int h2 = hexCharToVal(p[1]);
+        if (h1 >= 0 && h2 >= 0)
+        {
+            out.push_back(static_cast<uint8_t>((h1 << 4) | h2));
+            p += 2;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 std::wstring utf16Swap(const std::wstring& str)
 {
     std::wstring swapped = str;
@@ -4881,37 +4920,50 @@ void CSearchDlg::SendResult(const CSearchInfo& sInfo, const int nCount)
         SendMessage(*this, SEARCH_FOUND, bAsResult, reinterpret_cast<LPARAM>(&sInfo));
 }
 
-int CSearchDlg::SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern)
+int CSearchDlg::SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern, const std::vector<uint8_t>* replacePattern)
 {
     boost::iostreams::mapped_file_source inFile(boost::filesystem::path(sInfo.filePath));
     if (!inFile.is_open())
         return -1;
-    const uint8_t* inData = reinterpret_cast<const uint8_t*>(inFile.data());
-    size_t         inSize = inFile.size();
-    size_t         patternLen = hexPattern.size();
+    const uint8_t* inData      = reinterpret_cast<const uint8_t*>(inFile.data());
+    size_t         inSize      = inFile.size();
+    size_t         patternLen  = hexPattern.size();
+    bool           doReplace   = m_bReplace && (replacePattern != nullptr);
     if (patternLen == 0 || inSize < patternLen)
     {
         inFile.close();
         return 0;
     }
     sInfo.encoding = CTextFile::Binary;
-    int nFound     = 0;
-    for (size_t pos = 0; pos <= inSize - patternLen && !m_cancelled; ++pos)
+    int           nFound = 0;
+    size_t        pos    = 0;
+    std::wstring  filePathTemp;
+    std::vector<uint8_t> replaced;
+    if (doReplace)
     {
-        bool match = true;
-        for (size_t i = 0; i < patternLen && match; ++i)
+        filePathTemp = sInfo.filePath + L".grepwinreplaced";
+        replaced.reserve(inSize);
+    }
+    auto isMatchAt = [&](size_t offset) {
+        for (size_t i = 0; i < patternLen; ++i)
         {
             if (hexPattern[i].first) // wildcard
                 continue;
-            if (inData[pos + i] != hexPattern[i].second)
-                match = false;
+            if (inData[offset + i] != hexPattern[i].second)
+                return false;
         }
+        return true;
+    };
+    while (pos < inSize && !m_cancelled)
+    {
+        bool match = (pos <= (inSize - patternLen)) && isMatchAt(pos);
         if (match)
         {
             ++nFound;
             if (m_bNotSearch)
                 break;
-            sInfo.matchLinesNumbers.push_back(static_cast<DWORD>(pos));
+            const DWORD startPos = static_cast<DWORD>(pos);
+            sInfo.matchLinesNumbers.push_back(startPos);
             sInfo.matchColumnsNumbers.push_back(static_cast<DWORD>(patternLen));
             ++sInfo.matchCount;
             std::wstring hexPreview;
@@ -4926,11 +4978,39 @@ int CSearchDlg::SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searc
             }
             if (patternLen > 32)
                 hexPreview += L"...";
-            sInfo.matchLinesMap[static_cast<DWORD>(pos)] = hexPreview;
+            sInfo.matchLinesMap[startPos] = hexPreview;
             sInfo.matchLengths.push_back(static_cast<DWORD>(patternLen));
+            if (doReplace)
+            {
+                replaced.insert(replaced.end(), replacePattern->begin(), replacePattern->end());
+                pos += patternLen;
+                continue;
+            }
         }
+        if (doReplace)
+        {
+            replaced.push_back(inData[pos]);
+        }
+        ++pos;
     }
     inFile.close();
+    if (doReplace && !m_cancelled && nFound > 0)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_backupAndTempFilesMutex);
+            m_backupAndTempFiles.insert(filePathTemp);
+        }
+        std::basic_ofstream<char> outFile(filePathTemp, std::ios::out | std::ios::trunc | std::ios::binary);
+        if (!outFile.is_open())
+            return -1;
+        if (!replaced.empty())
+            outFile.write(reinterpret_cast<const char*>(replaced.data()), static_cast<std::streamsize>(replaced.size()));
+        outFile.close();
+        if (!outFile)
+            return -1;
+        if (AdoptTempResultFile(sInfo, searchRoot, filePathTemp) <= 0)
+            return -1;
+    }
     return nFound;
 }
 
@@ -4944,8 +5024,19 @@ void CSearchDlg::SearchFile(CSearchInfo sInfo, const std::wstring& searchRoot)
             SendResult(sInfo, -1);
             return;
         }
+        std::vector<uint8_t> replacePattern;
+        const auto*          pReplacePattern = static_cast<const std::vector<uint8_t>*>(nullptr);
+        if (m_bReplace)
+        {
+            if (!ParseHexReplacement(m_replaceString, replacePattern))
+            {
+                SendResult(sInfo, -1);
+                return;
+            }
+            pReplacePattern = &replacePattern;
+        }
         sInfo.encoding = CTextFile::Binary;
-        int nCount    = SearchByHexPattern(sInfo, searchRoot, hexPattern);
+        int nCount     = SearchByHexPattern(sInfo, searchRoot, hexPattern, pReplacePattern);
         SendResult(sInfo, nCount);
         return;
     }
