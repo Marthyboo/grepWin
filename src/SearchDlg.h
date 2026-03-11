@@ -107,7 +107,7 @@ protected:
     int              SearchOnTextFile(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::wstring& searchExpression, const std::wstring& replaceExpression, UINT syntaxFlags, UINT matchFlags, CTextFile& textFile);
     template <typename CharT = char>
     int         SearchByFilePath(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::wstring& searchExpression, const std::wstring& replaceExpression, UINT syntaxFlags, UINT matchFlags, bool misaligned, CharT* dummy = nullptr);
-    int         SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern);
+    int         SearchByHexPattern(CSearchInfo& sInfo, const std::wstring& searchRoot, const std::vector<std::pair<bool, uint8_t>>& hexPattern, const std::vector<uint8_t>* replacePattern);
     void        SendResult(const CSearchInfo& sInfo, const int nCount);
     void        SearchFile(CSearchInfo sInfo, const std::wstring& searchRoot);
 
